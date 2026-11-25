@@ -105,6 +105,7 @@
     <button id="parseBtn" class="primary" type="button">Segregate All</button>
     <button id="shareBtn" type="button">Share .vcf to Contacts</button>
     <button id="downloadBtn" type="button">Download .vcf</button>
+    <button id="refreshBtn" type="button">Refresh</button>
     <button id="resetBtn" type="button">Reset Sample</button>
   </div>
 
@@ -307,6 +308,23 @@
       renderView();
     });
 
+    document.getElementById("refreshBtn").addEventListener("click", () => {
+      const inputEl = document.getElementById("rawInput");
+      const templateNameEl = document.getElementById("templateName");
+      const templateSelectEl = document.getElementById("templateSelect");
+
+      inputEl.value = "";
+      templateNameEl.value = "";
+      templateSelectEl.value = "";
+
+      contacts = [];
+      currentIndex = 0;
+      renderView();
+
+      document.getElementById("status").textContent = "Cleared all. Ready for new contact details.";
+      inputEl.focus();
+    });
+
     document.getElementById("resetBtn").addEventListener("click", () => {
       document.getElementById("rawInput").value = SAMPLE_TEXT;
       runSegregation("Reset to default sample contact.");
@@ -397,3 +415,4 @@
   </script>
 </body>
 </html>
+
