@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-Contact Text to vCard & Share</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 780px;
+      margin: 24px auto;
+      padding: 0 16px 40px;
+      line-height: 1.45;
+      color: #111827;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 6px; }
+    h2 { font-size: 1.05rem; margin: 18px 0 8px; }
+    textarea, input, select {
+      font-family: inherit;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    textarea {
+      width: 100%;
+      min-height: 190px;
+      padding: 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 10px 0;
+    }
+    button {
+      padding: 9px 14px;
+      font-size: 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #f8fafc;
+      cursor: pointer;
+    }
+    button.primary {
+      background: #1d4ed8;
+      color: #fff;
+      border-color: #1d4ed8;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 6px 12px;
+      background: #f6f8fa;
+      padding: 12px;
+      border-radius: 8px;
+    }
+    .label { font-weight: 600; color: #374151; }
+    pre {
+      background: #111827;
+      color: #f9fafb;
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .status {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #1f2937;
+      min-height: 20px;
+    }
+    .badge {
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 8px;
+      background: #eef2ff;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Contact Text → Segregated .vcf</h1>
+  <p>Paste one or multiple contacts below, review the segregated fields, and share or download a <code>.vcf</code> file.</p>
+
+  <div class="row">
+    <select id="templateSelect" aria-label="Saved templates">
+      <option value="">-- Load Saved Template --</option>
+    </select>
+    <input id="templateName" type="text" placeholder="Template name (e.g. Sales Reps)" style="padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; flex: 1; min-width: 180px;" />
+    <button id="saveTemplateBtn" type="button">Save Template</button>
+    <button id="deleteTemplateBtn" type="button">Delete Template</button>
+  </div>
+
+  <textarea id="rawInput">Name: VENKAT KAMBALA
+· Title: AREA SALES MANAGER
+· Company: LABINDIA ANALYTICAL
+· Phone: +91 9676957084 / 040-4444 3530
+· Email: venkat.kambala@labindia.com
+· Address: # 1-3-37, CP Chamber, 2nd Floor, Street No: 5, Habsiguda, Hyderabad - 500 007.</textarea>
+
+  <div class="row">
+    <button id="parseBtn" class="primary" type="button">Segregate All</button>
+    <button id="shareBtn" type="button">Share .vcf to Contacts</button>
+    <button id="downloadBtn" type="button">Download .vcf</button>
+    <button id="resetBtn" type="button">Reset Sample</button>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <div class="row" style="margin-top: 16px;">
+    <h2 style="margin: 0;">Segregated Preview</h2>
+    <span id="contactCounter" class="badge">Contact 1 of 1</span>
+    <button id="prevBtn" type="button">Prev</button>
+    <button id="nextBtn" type="button">Next</button>
+  </div>
+  <div id="preview" class="grid"></div>
+
+  <h2>Generated vCard (.vcf Output)</h2>
+  <pre id="vcfOutput"></pre>
+
+  <script>
+    const STORAGE_KEY = "vcard_text_templates_v1";
+    const SAMPLE_TEXT = `Name: VENKAT KAMBALA
+· Title: AREA SALES MANAGER
+· Company: LABINDIA ANALYTICAL
+· Phone: +91 9676957084 / 040-4444 3530
+· Email: venkat.kambala@labindia.com
+· Address: # 1-3-37, CP Chamber, 2nd Floor, Street No: 5, Habsiguda, Hyderabad - 500 007.`;
+
+    let contacts = [];
+    let currentIndex = 0;
+
+    function cleanLinePrefix(line) {
+      return line.replace(/^\s*[·•\-*]+\s*/, "").trim();
+    }
+
+    function escapeVCard(val) {
+      return String(val || "")
+        .replace(/\\/g, "\\\\")
+        .replace(/\n/g, "\\n")
+        .replace(/;/g, "\\;")
+        .replace(/,/g, "\\,");
+    }
+
+    function splitName(fullName) {
+      const parts = fullName.trim().split(/\s+/).filter(Boolean);
+      if (parts.length === 0) return { given: "", family: "" };
+      if (parts.length === 1) return { given: parts[0], family: "" };
+      return {
+        given: parts.slice(0, -1).join(" "),
+        family: parts[parts.length - 1]
+      };
+    }
+
+    function splitBlocks(rawText) {
+      const normalized = rawText.replace(/\r\n/g, "\n").trim();
+      if (!normalized) return [];
+      const matches = [...normalized.matchAll(/(?:^|\n)\s*[·•\-*]?\s*Name\s*:/gi)];
+      if (matches.length <= 1) return [normalized];
+
+      const blocks = [];
+      for (let i = 0; i < matches.length; i++) {
+        const start = matches[i].index + (matches[i][0].startsWith("\n") ? 1 : 0);
+        const end = i + 1 < matches.length
+          ? matches[i + 1].index + (matches[i + 1][0].startsWith("\n") ? 1 : 0)
+          : normalized.length;
+        const slice = normalized.slice(start, end).trim();
+        if (slice) blocks.push(slice);
+      }
+      return blocks;
+    }
+
+    function parseSingleBlock(blockText) {
+      const fieldRegex = /(Name|Title|Company|Phone|Email|Address)\s*:\s*([\s\S]*?)(?=(?:\n\s*[·•\-*]?\s*(?:Name|Title|Company|Phone|Email|Address)\s*:)|$)/gi;
+      const data = { name: "", title: "", company: "", phones: [], email: "", address: "" };
+      let match;
+      while ((match = fieldRegex.exec(blockText)) !== null) {
+        const key = match[1].toLowerCase();
+        const val = cleanLinePrefix(match[2]).replace(/\s*\n\s*/g, " ").trim();
+        if (key === "name") data.name = val;
+        if (key === "title") data.title = val;
+        if (key === "company") data.company = val;
+        if (key === "phone") {
+          data.phones = val.split(/[\/|]+/).map(p => p.trim()).filter(Boolean);
+        }
+        if (key === "email") data.email = val;
+        if (key === "address") data.address = val;
+      }
+      return data;
+    }
+
+    function buildSingleVCard(d) {
+      const { given, family } = splitName(d.name);
+      const lines = [
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        `N:${escapeVCard(family)};${escapeVCard(given)};;;`,
+        `FN:${escapeVCard(d.name)}`
+      ];
+      if (d.company) lines.push(`ORG:${escapeVCard(d.company)}`);
+      if (d.title) lines.push(`TITLE:${escapeVCard(d.title)}`);
+      d.phones.forEach((ph, idx) => {
+        const type = idx === 0 ? "CELL" : "WORK";
+        lines.push(`TEL;TYPE=${type}:${escapeVCard(ph)}`);
+      });
+      if (d.email) lines.push(`EMAIL;TYPE=WORK:${escapeVCard(d.email)}`);
+      if (d.address) lines.push(`ADR;TYPE=WORK:;;${escapeVCard(d.address)};;;;`);
+      lines.push("END:VCARD");
+      return lines.join("\r\n");
+    }
+
+    function buildAllVCards(list) {
+      return list.map(buildSingleVCard).join("\r\n");
+    }
+
+    function getFileName(list) {
+      if (list.length === 1 && list[0].name) {
+        const slug = list[0].name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+        return `${slug || "contact"}.vcf`;
+      }
+      return list.length > 1 ? `contacts_${list.length}.vcf` : "contact.vcf";
+    }
+
+    function renderView() {
+      const total = contacts.length;
+      const counterEl = document.getElementById("contactCounter");
+      const previewEl = document.getElementById("preview");
+      const vcfEl = document.getElementById("vcfOutput");
+
+      if (total === 0) {
+        counterEl.textContent = "Contact 0 of 0";
+        previewEl.innerHTML = `<div class="label">Status</div><div>No contact fields detected.</div>`;
+        vcfEl.textContent = "";
+        return;
+      }
+
+      if (currentIndex >= total) currentIndex = 0;
+      const d = contacts[currentIndex];
+      counterEl.textContent = `Contact ${currentIndex + 1} of ${total}`;
+
+      const rows = [
+        ["Name", d.name],
+        ["Title", d.title],
+        ["Company", d.company],
+        ["Phones", d.phones.join(" | ")],
+        ["Email", d.email],
+        ["Address", d.address]
+      ];
+      previewEl.innerHTML = rows
+        .map(([k, v]) => `<div class="label">${k}</div><div>${v || "—"}</div>`)
+        .join("");
+
+      vcfEl.textContent = buildAllVCards(contacts);
+    }
+
+    function runSegregation(message = "") {
+      const raw = document.getElementById("rawInput").value;
+      const blocks = splitBlocks(raw);
+      contacts = blocks.map(parseSingleBlock);
+      currentIndex = 0;
+      renderView();
+      if (message) {
+        document.getElementById("status").textContent = message;
+      } else {
+        document.getElementById("status").textContent =
+          `Segregated ${contacts.length} contact${contacts.length === 1 ? "" : "s"}.`;
+      }
+    }
+
+    function loadTemplatesMap() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      } catch {
+        return {};
+      }
+    }
+
+    function saveTemplatesMap(map) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    }
+
+    function refreshTemplateDropdown(selectedName = "") {
+      const select = document.getElementById("templateSelect");
+      const map = loadTemplatesMap();
+      const names = Object.keys(map).sort();
+      select.innerHTML = `<option value="">-- Load Saved Template (${names.length}) --</option>` +
+        names.map(n => `<option value="${n.replace(/"/g, "&quot;")}">${n}</option>`).join("");
+      if (selectedName && map[selectedName]) {
+        select.value = selectedName;
+      }
+    }
+
+    document.getElementById("parseBtn").addEventListener("click", () => runSegregation());
+
+    document.getElementById("prevBtn").addEventListener("click", () => {
+      if (!contacts.length) return;
+      currentIndex = (currentIndex - 1 + contacts.length) % contacts.length;
+      renderView();
+    });
+
+    document.getElementById("nextBtn").addEventListener("click", () => {
+      if (!contacts.length) return;
+      currentIndex = (currentIndex + 1) % contacts.length;
+      renderView();
+    });
+
+    document.getElementById("resetBtn").addEventListener("click", () => {
+      document.getElementById("rawInput").value = SAMPLE_TEXT;
+      runSegregation("Reset to default sample contact.");
+    });
+
+    document.getElementById("saveTemplateBtn").addEventListener("click", () => {
+      const nameInput = document.getElementById("templateName");
+      const name = nameInput.value.trim();
+      if (!name) {
+        document.getElementById("status").textContent = "Enter a template name first.";
+        return;
+      }
+      const map = loadTemplatesMap();
+      map[name] = document.getElementById("rawInput").value;
+      saveTemplatesMap(map);
+      refreshTemplateDropdown(name);
+      document.getElementById("status").textContent = `Saved template "${name}".`;
+    });
+
+    document.getElementById("templateSelect").addEventListener("change", (e) => {
+      const name = e.target.value;
+      if (!name) return;
+      const map = loadTemplatesMap();
+      if (map[name] !== undefined) {
+        document.getElementById("rawInput").value = map[name];
+        document.getElementById("templateName").value = name;
+        runSegregation(`Loaded template "${name}".`);
+      }
+    });
+
+    document.getElementById("deleteTemplateBtn").addEventListener("click", () => {
+      const select = document.getElementById("templateSelect");
+      const name = select.value || document.getElementById("templateName").value.trim();
+      const map = loadTemplatesMap();
+      if (!name || !map[name]) {
+        document.getElementById("status").textContent = "Select a saved template to delete.";
+        return;
+      }
+      delete map[name];
+      saveTemplatesMap(map);
+      document.getElementById("templateName").value = "";
+      refreshTemplateDropdown("");
+      document.getElementById("status").textContent = `Deleted template "${name}".`;
+    });
+
+    document.getElementById("downloadBtn").addEventListener("click", () => {
+      runSegregation();
+      if (!contacts.length) return;
+      const vcf = buildAllVCards(contacts);
+      const fileName = getFileName(contacts);
+      const blob = new Blob([vcf], { type: "text/vcard;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      document.getElementById("status").textContent = `Downloaded ${fileName}.`;
+    });
+
+    document.getElementById("shareBtn").addEventListener("click", async () => {
+      runSegregation();
+      if (!contacts.length) return;
+      const vcf = buildAllVCards(contacts);
+      const fileName = getFileName(contacts);
+      const file = new File([vcf], fileName, { type: "text/vcard" });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: contacts.length === 1 ? (contacts[0].name || "Contact") : `${contacts.length} Contacts`,
+            text: `vCard file: ${fileName}`
+          });
+          document.getElementById("status").textContent = `Shared ${fileName}.`;
+        } catch {
+          document.getElementById("status").textContent = "Share cancelled or unavailable; use Download .vcf.";
+        }
+      } else {
+        document.getElementById("status").textContent = "Direct file share not supported here; use Download .vcf.";
+      }
+    });
+
+    refreshTemplateDropdown("");
+    runSegregation();
+  </script>
+</body>
+</html>
